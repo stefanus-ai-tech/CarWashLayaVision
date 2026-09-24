@@ -50,7 +50,7 @@ def _save_reports(folder: Path, events: list[dict], count: int, revenue: int) ->
     summary = {
         "vehicles": count,
         "estimated_revenue": revenue,
-        "review_count": sum(e["status"] != "Otomatis" for e in events),
+        "review_count": sum(e["status"] not in {"Otomatis", "Diverifikasi manual"} for e in events),
         "by_class": {name: sum(e["tariff_class"] == name for e in events)
                      for name in ("MOTORCYCLE", "SMALL", "MEDIUM", "LARGE", "COMMERCIAL", "REVIEW")},
     }
@@ -154,7 +154,7 @@ def process_video(
                             except Exception as exc:
                                 status = f"Klasifikasi gagal: {type(exc).__name__}"
                         track.body_type, track.tariff_class = body_type, klass
-                        track.tariff = tariffs.get(klass) if status == "Otomatis" else None
+                        track.tariff = tariffs.get(klass)
                         if track.tariff is not None:
                             revenue += track.tariff
                         events.append({

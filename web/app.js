@@ -28,6 +28,10 @@ function updateCountMode() {
   $('lineField').hidden = !byLine;
   $('directionField').hidden = !byLine;
   $('entryLine').hidden = !byLine || $('sourcePreview').hidden;
+  $('countFoot').textContent = byLine ? 'Melewati garis masuk' : 'Terdeteksi stabil';
+  $('sideNote').textContent = byLine ? 'Data berubah mengikuti frame yang diproses. Pastikan garis sesuai jalur masuk kendaraan.' : 'Kendaraan dihitung setelah terlihat stabil selama tiga frame. Cocok untuk klip saat mobil sudah di area cuci.';
+  if (!$('lastContent').hidden) return;
+  $('lastEmpty').textContent = byLine ? 'Belum ada kendaraan yang melewati garis.' : 'Belum ada kendaraan yang terdeteksi stabil.';
 }
 
 function chooseFile(file) {
@@ -121,6 +125,7 @@ function setStatus(data) {
   if (data.status === 'error') showMessage(data.message, true);
   renderEvents(data.events);
   renderDistribution(data.by_class, data.event_count);
+  renderCorrection(data.events, data.status === 'done');
   if (data.status === 'done') {
     $('startButton').disabled = false;
     $('startButton').querySelector('span:first-child').textContent = 'Analisis lagi';
@@ -136,7 +141,7 @@ function renderEvents(events) {
     const cell = document.createElement('td');
     cell.colSpan = 6;
     cell.className = 'empty-row';
-    cell.textContent = 'Event akan muncul saat kendaraan melewati garis masuk.';
+    cell.textContent = $('countMode').value === 'line' ? 'Event akan muncul saat kendaraan melewati garis masuk.' : 'Event akan muncul saat kendaraan terdeteksi stabil.';
     row.append(cell); body.append(row);
     $('lastEmpty').hidden = false;
     $('lastContent').hidden = true;
@@ -149,11 +154,13 @@ function renderEvents(events) {
   $('lastStatus').textContent = last.status;
   $('lastBody').textContent = last.body_type || 'Belum dikenal';
   $('lastClass').textContent = last.tariff_class;
-  $('lastTariff').textContent = last.tariff === '' ? 'Cek manual' : money(last.tariff);
+  $('lastTariff').textContent = last.tariff === '' ? 'Pilih kelas' : money(last.tariff);
+  $('priceNote').hidden = ['Otomatis', 'Diverifikasi manual'].includes(last.status);
+  $('priceNote').textContent = last.tariff === '' ? 'Kelas belum diketahui. Pilih kelas tarif setelah analisis selesai.' : 'Harga ini perkiraan AI. Cek kelasnya sebelum dipakai untuk tagihan.';
   for (const event of events) {
     const row = document.createElement('tr');
     const values = [event.timestamp, `#${event.track_id}`, event.body_type, event.tariff_class,
-      event.tariff === '' ? '—' : money(event.tariff)];
+      event.tariff === '' ? '—' : `${money(event.tariff)}${['Otomatis', 'Diverifikasi manual'].includes(event.status) ? '' : ' *'}`];
     values.forEach(value => { const cell = document.createElement('td'); cell.textContent = value; row.append(cell); });
     const cell = document.createElement('td');
     const badge = document.createElement('span');
@@ -161,6 +168,41 @@ function renderEvents(events) {
     badge.textContent = event.status;
     cell.append(badge); row.append(cell); body.append(row);
   }
+}
+
+function renderCorrection(events, finished) {
+  const panel = $('correction');
+  panel.hidden = !finished || events.length === 0;
+  if (panel.hidden) return;
+  const selected = $('eventSelect').value;
+  $('eventSelect').replaceChildren();
+  for (const event of events) {
+    const option = document.createElement('option');
+    option.value = event.event_id;
+    option.textContent = `${event.event_id} · #${event.track_id} · ${event.status}`;
+    $('eventSelect').append(option);
+  }
+  $('eventSelect').value = events.some(event => event.event_id === selected) ? selected : events[0].event_id;
+  const active = events.find(event => event.event_id === $('eventSelect').value);
+  $('classSelect').value = active && active.tariff_class !== 'REVIEW' ? active.tariff_class : '';
+}
+
+async function saveCorrection() {
+  if (!currentJob || !$('eventSelect').value || !$('classSelect').value) {
+    showMessage('Pilih event dan kelas tarif dulu.', true); return;
+  }
+  $('saveCorrection').disabled = true;
+  try {
+    const response = await fetch(`/api/jobs/${currentJob}/events/${$('eventSelect').value}`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({tariff_class: $('classSelect').value})
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'Koreksi gagal.');
+    await poll();
+    showMessage(`Harga ${result.event.event_id} diperbarui jadi ${money(result.event.tariff)}.`);
+  } catch (error) { showMessage(error.message, true); }
+  finally { $('saveCorrection').disabled = false; }
 }
 
 function renderDistribution(counts, total) {
@@ -252,4 +294,6 @@ $('line').addEventListener('input', event => { $('lineValue').textContent = `${e
 $('threshold').addEventListener('input', event => { $('thresholdValue').textContent = `${event.target.value}%`; });
 $('entryLine').style.top = `${$('line').value}%`;
 $('settingsForm').addEventListener('submit', start);
+$('eventSelect').addEventListener('change', () => { $('classSelect').value = ''; });
+$('saveCorrection').addEventListener('click', saveCorrection);
 loadLibrary();

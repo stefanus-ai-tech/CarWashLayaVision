@@ -64,5 +64,5 @@ class LayaClassifier:
         else:
             choice_confidence = min(body_p, size_p, 1.0 - commercial_p)
         if choice_confidence < threshold or klass == "REVIEW":
-            return Classification(body, size, "REVIEW", choice_confidence, "Perlu cek manual")
+            return Classification(body, size, klass, choice_confidence, "Perlu cek manual")
         return Classification(body, size, klass, choice_confidence, "Otomatis")

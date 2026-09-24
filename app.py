@@ -14,9 +14,10 @@ import cv2
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from carwash.core import DEFAULT_TARIFFS
-from carwash.pipeline import process_video
+from carwash.pipeline import process_video, _save_reports
 
 
 ROOT = Path(__file__).resolve().parent
@@ -31,6 +32,7 @@ VIDEO_LIBRARY = Path(os.environ.get("CARWASH_VIDEO_DIR", str(Path.home() / "Vide
 class Job:
     id: str
     folder: Path
+    tariffs: dict[str, int] = field(default_factory=lambda: DEFAULT_TARIFFS.copy())
     status: str = "queued"
     message: str = "Menyiapkan video..."
     warning: str = ""
@@ -184,7 +186,7 @@ async def create_job(
     count_mode: str = Form("line"),
     model: str = Form("yolo11n.pt"),
     use_laya: bool = Form(True),
-    threshold: float = Form(0.65),
+    threshold: float = Form(0.90),
     motorcycle: int = Form(15000),
     small: int = Form(30000),
     medium: int = Form(40000),
@@ -215,7 +217,7 @@ async def create_job(
             while chunk := await video.read(1024 * 1024):
                 target.write(chunk)
         await video.close()
-    job = Job(job_id, folder)
+    job = Job(job_id, folder, tariffs=tariffs)
     with jobs_lock:
         jobs[job_id] = job
     threading.Thread(target=_run, args=(job, source, model, line, direction, count_mode,
@@ -226,6 +228,30 @@ async def create_job(
 @app.get("/api/jobs/{job_id}")
 def job_status(job_id: str):
     return _get_job(job_id).payload()
+
+
+class TariffCorrection(BaseModel):
+    tariff_class: str
+
+
+@app.patch("/api/jobs/{job_id}/events/{event_id}")
+def correct_event(job_id: str, event_id: str, correction: TariffCorrection):
+    job = _get_job(job_id)
+    if correction.tariff_class not in job.tariffs:
+        raise HTTPException(400, "Kelas tarif tidak valid")
+    with job.changed:
+        if job.status != "done":
+            raise HTTPException(409, "Koreksi tersedia setelah analisis selesai")
+        event = next((item for item in job.events if item["event_id"] == event_id), None)
+        if event is None:
+            raise HTTPException(404, "Event tidak ditemukan")
+        event["tariff_class"] = correction.tariff_class
+        event["tariff"] = job.tariffs[correction.tariff_class]
+        event["status"] = "Diverifikasi manual"
+        job.revenue = sum(int(item["tariff"]) for item in job.events if item["tariff"] != "")
+        _save_reports(job.folder, job.events, job.count, job.revenue)
+        job.changed.notify_all()
+        return {"event": event, "revenue": job.revenue}
 
 
 @app.get("/api/jobs/{job_id}/stream")
